@@ -416,7 +416,7 @@ export class DatabaseStorage implements IStorage {
 
     if (!shareLink) return undefined;
 
-    if (new Date(shareLink.expiresAt) < new Date()) {
+    if (new Date(shareLink.expiresAt as unknown as string) < new Date()) {
       return undefined;
     }
 

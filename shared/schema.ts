@@ -1,9 +1,8 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, doublePrecision, boolean, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 
-// Enums as string literals for TypeScript
 export const memberRoles = ["admin", "manager", "creator", "viewer"] as const;
 export type MemberRole = (typeof memberRoles)[number];
 
@@ -16,16 +15,15 @@ export type AuthorType = (typeof authorTypes)[number];
 export const anchorTypes = ["point", "rect"] as const;
 export type AnchorType = (typeof anchorTypes)[number];
 
-// Users table
-export const users = sqliteTable("users", {
+export const users = pgTable("users", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
   password: text("password").notNull(),
   email: text("email"),
   displayName: text("display_name"),
   avatarUrl: text("avatar_url"),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
 });
 
@@ -36,19 +34,18 @@ export const insertUserSchema = createInsertSchema(users).omit({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
-// Projects table
-export const projects = sqliteTable("projects", {
+export const projects = pgTable("projects", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   description: text("description"),
   clientName: text("client_name"),
   dueDate: text("due_date"),
   createdBy: text("created_by").notNull(),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
-  updatedAt: integer("updated_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
 });
 
@@ -60,8 +57,7 @@ export const insertProjectSchema = createInsertSchema(projects).omit({
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type Project = typeof projects.$inferSelect;
 
-// Files table
-export const files = sqliteTable("files", {
+export const files = pgTable("files", {
   id: text("id").primaryKey(),
   projectId: text("project_id"),
   name: text("name").notNull(),
@@ -70,15 +66,15 @@ export const files = sqliteTable("files", {
   storagePath: text("storage_path"),
   url: text("url"),
   thumbnailUrl: text("thumbnail_url"),
-  previewPath: text("preview_path"), // Path to generated preview image for PSD/AI files
+  previewPath: text("preview_path"),
   versionNumber: integer("version_number").notNull().default(1),
   parentFileId: text("parent_file_id"),
   createdBy: text("created_by").notNull(),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
-  updatedAt: integer("updated_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
 });
 
@@ -90,8 +86,7 @@ export const insertFileSchema = createInsertSchema(files).omit({
 export type InsertFile = z.infer<typeof insertFileSchema>;
 export type File = typeof files.$inferSelect;
 
-// Comments table
-export const comments = sqliteTable("comments", {
+export const comments = pgTable("comments", {
   id: text("id").primaryKey(),
   fileId: text("file_id").notNull(),
   parentId: text("parent_id"),
@@ -100,11 +95,11 @@ export const comments = sqliteTable("comments", {
   guestName: text("guest_name"),
   body: text("body").notNull(),
   status: text("status").$type<CommentStatus>().notNull().default("open"),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
-  updatedAt: integer("updated_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
 });
 
@@ -115,47 +110,37 @@ export const insertCommentSchema = createInsertSchema(comments).omit({
 export type InsertComment = z.infer<typeof insertCommentSchema>;
 export type Comment = typeof comments.$inferSelect;
 
-// Comment Anchors table (for pin positions)
-export const commentAnchors = sqliteTable("comment_anchors", {
+export const commentAnchors = pgTable("comment_anchors", {
   commentId: text("comment_id").primaryKey(),
   anchorType: text("anchor_type")
     .$type<AnchorType>()
     .notNull()
     .default("point"),
   pageNo: integer("page_no"),
-  x: real("x"),
-  y: real("y"),
-  w: real("w"),
-  h: real("h"),
-  videoTimestamp: real("video_timestamp"),
+  x: doublePrecision("x"),
+  y: doublePrecision("y"),
+  w: doublePrecision("w"),
+  h: doublePrecision("h"),
+  videoTimestamp: doublePrecision("video_timestamp"),
 });
 
 export const insertCommentAnchorSchema = createInsertSchema(commentAnchors);
 export type InsertCommentAnchor = z.infer<typeof insertCommentAnchorSchema>;
 export type CommentAnchor = typeof commentAnchors.$inferSelect;
 
-// Share Links table
-export const shareLinks = sqliteTable("share_links", {
+export const shareLinks = pgTable("share_links", {
   id: text("id").primaryKey(),
   fileId: text("file_id").notNull(),
   token: text("token").notNull().unique(),
-  expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
-  allowDownload: integer("allow_download", { mode: "boolean" })
-    .notNull()
-    .default(true),
-  permCommentRead: integer("perm_comment_read", { mode: "boolean" })
-    .notNull()
-    .default(true),
-  permCommentWrite: integer("perm_comment_write", { mode: "boolean" })
-    .notNull()
-    .default(true),
-  isRevoked: integer("is_revoked", { mode: "boolean" })
-    .notNull()
-    .default(false),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  allowDownload: boolean("allow_download").notNull().default(true),
+  permCommentRead: boolean("perm_comment_read").notNull().default(true),
+  permCommentWrite: boolean("perm_comment_write").notNull().default(true),
+  isRevoked: boolean("is_revoked").notNull().default(false),
   passwordHash: text("password_hash"),
   createdBy: text("created_by").notNull(),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
 });
 
@@ -166,17 +151,16 @@ export const insertShareLinkSchema = createInsertSchema(shareLinks).omit({
 export type InsertShareLink = z.infer<typeof insertShareLinkSchema>;
 export type ShareLink = typeof shareLinks.$inferSelect;
 
-// Paint Annotations table (for storing paint strokes)
-export const paintAnnotations = sqliteTable("paint_annotations", {
+export const paintAnnotations = pgTable("paint_annotations", {
   id: text("id").primaryKey(),
   fileId: text("file_id").notNull(),
-  strokesData: text("strokes_data").notNull(), // JSON string of paint strokes
+  strokesData: text("strokes_data").notNull(),
   createdBy: text("created_by").notNull(),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
-  updatedAt: integer("updated_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
 });
 
@@ -190,8 +174,7 @@ export const insertPaintAnnotationSchema = createInsertSchema(
 export type InsertPaintAnnotation = z.infer<typeof insertPaintAnnotationSchema>;
 export type PaintAnnotation = typeof paintAnnotations.$inferSelect;
 
-// Comment Replies table
-export const commentReplies = sqliteTable("comment_replies", {
+export const commentReplies = pgTable("comment_replies", {
   id: text("id").primaryKey(),
   commentId: text("comment_id").notNull(),
   authorUserId: text("author_user_id"),
@@ -200,8 +183,8 @@ export const commentReplies = sqliteTable("comment_replies", {
   attachmentUrl: text("attachment_url"),
   attachmentName: text("attachment_name"),
   attachmentType: text("attachment_type"),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .default(sql`(unixepoch() * 1000)`)
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
 });
 
@@ -218,7 +201,6 @@ export interface CommentReplyWithAuthor extends CommentReply {
   author?: User;
 }
 
-// Extended types with relations
 export interface FileWithComments extends File {
   comments: CommentWithAnchor[];
   project?: Project;
@@ -235,8 +217,6 @@ export interface ProjectWithFiles extends Project {
   files: File[];
   fileCount: number;
   commentCount: number;
-  // TODO: Fix this type in ProjectWithFiles
-  // commentCount: number;
 }
 
 export interface ShareLinkWithFile extends ShareLink {
