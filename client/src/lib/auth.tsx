@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import type { User } from "@shared/schema";
 
 interface AuthContextType {
@@ -10,17 +10,18 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+function loadUserFromStorage(): User | null {
+  try {
+    const saved = localStorage.getItem("checkback_user");
+    return saved ? (JSON.parse(saved) as User) : null;
+  } catch {
+    return null;
+  }
+}
 
-  useEffect(() => {
-    const savedUser = localStorage.getItem("checkback_user");
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
-    setIsLoading(false);
-  }, []);
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(loadUserFromStorage);
+  const [isLoading] = useState(false);
 
   const login = async (username: string, password: string): Promise<boolean> => {
     try {

@@ -77,19 +77,12 @@ function FileReviewLayout({ children }: { children: React.ReactNode }) {
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
   const [, setLocation] = useLocation();
-  const [shouldRedirect, setShouldRedirect] = useState(false);
 
   useEffect(() => {
     if (!isLoading && !user) {
-      setShouldRedirect(true);
-    }
-  }, [isLoading, user]);
-
-  useEffect(() => {
-    if (shouldRedirect) {
       setLocation("/login");
     }
-  }, [shouldRedirect, setLocation]);
+  }, [isLoading, user, setLocation]);
 
   if (isLoading) {
     return (
