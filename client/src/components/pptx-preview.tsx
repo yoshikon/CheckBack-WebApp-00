@@ -131,34 +131,20 @@ export function PptxPreview({
     let cancelled = false;
     const gen = async () => {
       const count = presentation.slides.length;
-      const results: string[] = [];
+      const results: string[] = new Array(count).fill("");
+      setThumbnails([...results]);
+      onThumbnailsChange?.([...results]);
       for (let i = 0; i < count; i++) {
         if (cancelled) return;
         try {
-          const thumb = await generateCanvasThumbnail(presentation, i, 240);
-          results.push(thumb);
+          results[i] = await generateCanvasThumbnail(presentation, i, 320);
         } catch {
-          const canvas = document.createElement("canvas");
-          canvas.width = 240;
-          canvas.height = 135;
-          const ctx = canvas.getContext("2d");
-          if (ctx) {
-            ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, 240, 135);
-            ctx.strokeStyle = "#d1d5db";
-            ctx.strokeRect(0.5, 0.5, 239, 134);
-            ctx.fillStyle = "#6b7280";
-            ctx.font = "20px sans-serif";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText(String(i + 1), 120, 67);
-          }
-          results.push(canvas.toDataURL("image/png"));
+          results[i] = "";
         }
-      }
-      if (!cancelled) {
-        setThumbnails(results);
-        onThumbnailsChange?.(results);
+        if (!cancelled) {
+          setThumbnails([...results]);
+          onThumbnailsChange?.([...results]);
+        }
       }
     };
     void gen();

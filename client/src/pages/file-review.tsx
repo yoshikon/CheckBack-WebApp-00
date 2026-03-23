@@ -8502,25 +8502,31 @@ export default function FileReviewPage() {
                   key={`pptx-thumb-${index}`}
                   type="button"
                   className={cn(
-                    "w-28 h-20 overflow-hidden rounded-md border-2 cursor-pointer relative bg-white",
+                    "w-[108px] overflow-hidden rounded border cursor-pointer relative group",
                     pptxSlideIndex === index
-                      ? "border-primary"
-                      : "border-border",
+                      ? "ring-2 ring-primary shadow-sm"
+                      : "ring-1 ring-border hover:ring-foreground/30",
                   )}
                   onClick={() => setPptxSlideIndex(index)}
                   data-testid={`thumbnail-page-${index + 1}`}
                 >
-                  {thumb ? (
-                    <img
-                      src={thumb}
-                      alt={`slide-${index + 1}`}
-                      className="w-full h-full object-contain"
-                    />
-                  ) : (
-                    <div className="w-full h-full bg-muted flex items-center justify-center text-xs text-muted-foreground">
-                      {index + 1}
-                    </div>
-                  )}
+                  <div className="absolute top-0 left-0 z-10 bg-black/50 text-white text-[10px] leading-none px-1 py-0.5 rounded-br">
+                    {index + 1}
+                  </div>
+                  <div className="w-full aspect-[16/9] bg-white flex items-center justify-center">
+                    {thumb ? (
+                      <img
+                        src={thumb}
+                        alt={`slide-${index + 1}`}
+                        className="w-full h-full object-contain"
+                        draggable={false}
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-muted flex items-center justify-center text-xs text-muted-foreground">
+                        {index + 1}
+                      </div>
+                    )}
+                  </div>
                 </button>
               ))}
             </>
