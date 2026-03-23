@@ -19,18 +19,10 @@ interface PptxPreviewProps {
   showInternalThumbnails?: boolean;
 }
 
-async function fallbackThumbnailFromCanvas(
-  presentation: LoadedPresentation,
-  slideIndex: number,
-  thumbW: number,
-  thumbH: number,
-): Promise<string> {
-  const { renderSlideToCanvas } = await import("pptx-viewer");
-  const canvas = document.createElement("canvas");
-  canvas.width = thumbW;
-  canvas.height = thumbH;
-  await renderSlideToCanvas(presentation, slideIndex, canvas);
-  return canvas.toDataURL("image/png");
+function svgElementToDataUrl(svg: SVGSVGElement): string {
+  const serialized = new XMLSerializer().serializeToString(svg);
+  const encoded = encodeURIComponent(serialized);
+  return `data:image/svg+xml;charset=utf-8,${encoded}`;
 }
 
 export function PptxPreview({
@@ -173,28 +165,52 @@ export function PptxPreview({
   useEffect(() => {
     if (!presentation) return;
     let cancelled = false;
-    const thumbW = 320;
-    const slideSize = presentation.slideSize;
-    const thumbH = Math.round((slideSize.height / slideSize.width) * thumbW);
-    const count = presentation.slides.length;
-    const results: string[] = new Array(count).fill("");
-    setThumbnails([...results]);
-    onThumbnailsChange?.([...results]);
 
     const gen = async () => {
-      for (let i = 0; i < count; i++) {
+      try {
+        const { getThumbnails } = await import("pptx-viewer");
+        const svgThumbnails = getThumbnails(presentation, 320);
         if (cancelled) return;
+
+        const dataUrls = svgThumbnails.map((svg) => svgElementToDataUrl(svg));
+        setThumbnails(dataUrls);
+        onThumbnailsChange?.(dataUrls);
+      } catch {
+        if (cancelled) return;
+
+        const count = presentation.slides.length;
+        const results: string[] = new Array(count).fill("");
+        setThumbnails([...results]);
+        onThumbnailsChange?.([...results]);
+
         try {
-          results[i] = await fallbackThumbnailFromCanvas(presentation, i, thumbW, thumbH);
+          const { renderSlideToCanvas } = await import("pptx-viewer");
+          const slideSize = presentation.slideSize;
+          const thumbW = 320;
+          const thumbH = Math.round((slideSize.height / slideSize.width) * thumbW);
+
+          for (let i = 0; i < count; i++) {
+            if (cancelled) return;
+            try {
+              const canvas = document.createElement("canvas");
+              canvas.width = thumbW;
+              canvas.height = thumbH;
+              await renderSlideToCanvas(presentation, i, canvas);
+              results[i] = canvas.toDataURL("image/png");
+            } catch {
+              results[i] = "";
+            }
+            if (!cancelled) {
+              setThumbnails([...results]);
+              onThumbnailsChange?.([...results]);
+            }
+          }
         } catch {
-          results[i] = "";
-        }
-        if (!cancelled) {
-          setThumbnails([...results]);
-          onThumbnailsChange?.([...results]);
+          // fallback failed silently
         }
       }
     };
+
     void gen();
     return () => { cancelled = true; };
   }, [presentation, onThumbnailsChange]);

@@ -8494,41 +8494,50 @@ export default function FileReviewPage() {
         <div className="w-32 border-r bg-card flex flex-col items-center py-3 gap-2 shrink-0 overflow-y-auto">
           {isPptx && !isReplyThumbnailActive ? (
             <>
-              <div className="text-xs text-muted-foreground mb-1">
-                {pptxSidebarThumbnails.length} 件
-              </div>
-              {pptxSidebarThumbnails.map((thumb, index) => (
-                <button
-                  key={`pptx-thumb-${index}`}
-                  type="button"
-                  className={cn(
-                    "w-[108px] overflow-hidden rounded border cursor-pointer relative group",
-                    pptxSlideIndex === index
-                      ? "ring-2 ring-primary shadow-sm"
-                      : "ring-1 ring-border hover:ring-foreground/30",
-                  )}
-                  onClick={() => setPptxSlideIndex(index)}
-                  data-testid={`thumbnail-page-${index + 1}`}
-                >
-                  <div className="absolute top-0 left-0 z-10 bg-black/50 text-white text-[10px] leading-none px-1 py-0.5 rounded-br">
-                    {index + 1}
+              {pptxSidebarThumbnails.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-4 text-muted-foreground">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  <span className="text-[10px]">読み込み中</span>
+                </div>
+              ) : (
+                <>
+                  <div className="text-xs text-muted-foreground mb-1">
+                    {pptxSidebarThumbnails.length} 件
                   </div>
-                  <div className="w-full aspect-[16/9] bg-white flex items-center justify-center">
-                    {thumb ? (
-                      <img
-                        src={thumb}
-                        alt={`slide-${index + 1}`}
-                        className="w-full h-full object-contain"
-                        draggable={false}
-                      />
-                    ) : (
-                      <div className="w-full h-full bg-muted flex items-center justify-center text-xs text-muted-foreground">
+                  {pptxSidebarThumbnails.map((thumb, index) => (
+                    <button
+                      key={`pptx-thumb-${index}`}
+                      type="button"
+                      className={cn(
+                        "w-[108px] overflow-hidden rounded border cursor-pointer relative group",
+                        pptxSlideIndex === index
+                          ? "ring-2 ring-primary shadow-sm"
+                          : "ring-1 ring-border hover:ring-foreground/30",
+                      )}
+                      onClick={() => setPptxSlideIndex(index)}
+                      data-testid={`thumbnail-page-${index + 1}`}
+                    >
+                      <div className="absolute top-0 left-0 z-10 bg-black/50 text-white text-[10px] leading-none px-1 py-0.5 rounded-br">
                         {index + 1}
                       </div>
-                    )}
-                  </div>
-                </button>
-              ))}
+                      <div className="w-full aspect-[16/9] bg-white flex items-center justify-center">
+                        {thumb ? (
+                          <img
+                            src={thumb}
+                            alt={`slide-${index + 1}`}
+                            className="w-full h-full object-contain"
+                            draggable={false}
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-muted flex items-center justify-center">
+                            <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </>
+              )}
             </>
           ) : (
             <>
