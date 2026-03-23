@@ -1,13 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, Loader as Loader2 } from "lucide-react";
-import type {
-  LoadedPresentation,
-  Presentation,
-  Slide,
-  SlideLayout,
-  SlideMaster,
-} from "pptx-viewer";
+import type { LoadedPresentation } from "pptx-viewer";
 
 interface PptxPreviewProps {
   src: string;
@@ -20,45 +14,27 @@ interface PptxPreviewProps {
   showInternalThumbnails?: boolean;
 }
 
-function resolveSlideInheritance(
-  presentation: Presentation,
-  slide: Slide,
-): { layout?: SlideLayout; master?: SlideMaster } {
-  let layout: SlideLayout | undefined;
-  let master: SlideMaster | undefined;
-
-  if (slide.layoutId && presentation.slideLayouts) {
-    layout = presentation.slideLayouts.get(slide.layoutId);
-  }
-  if (layout?.masterId && presentation.slideMasters) {
-    master = presentation.slideMasters.get(layout.masterId);
-  }
-  if (!master && presentation.slideMasters?.size) {
-    master = presentation.slideMasters.values().next().value as SlideMaster | undefined;
-  }
-  return { layout, master };
+async function renderToCanvas(
+  presentation: LoadedPresentation,
+  slideIndex: number,
+  canvas: HTMLCanvasElement,
+): Promise<void> {
+  const { renderSlideToCanvas } = await import("pptx-viewer");
+  await renderSlideToCanvas(presentation, slideIndex, canvas);
 }
 
-async function generateCanvasThumbnail(
-  presentation: Presentation,
+async function generateThumbnailDataUrl(
+  presentation: LoadedPresentation,
   slideIndex: number,
-  width: number,
+  thumbW: number,
 ): Promise<string> {
-  const { renderSlideWithInheritance } = await import("pptx-viewer");
-  const slide = presentation.slides[slideIndex];
-  if (!slide) return "";
-
-  const { layout, master } = resolveSlideInheritance(presentation, slide);
-  const svg = renderSlideWithInheritance(
-    slide,
-    presentation.slideSize,
-    layout,
-    master,
-    { width },
-  );
-
-  const serialized = new XMLSerializer().serializeToString(svg);
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialized)}`;
+  const slideSize = presentation.slideSize;
+  const slideH = Math.round((slideSize.height / slideSize.width) * thumbW);
+  const canvas = document.createElement("canvas");
+  canvas.width = thumbW;
+  canvas.height = slideH;
+  await renderToCanvas(presentation, slideIndex, canvas);
+  return canvas.toDataURL("image/png");
 }
 
 export function PptxPreview({
@@ -72,11 +48,12 @@ export function PptxPreview({
   showInternalThumbnails = true,
 }: PptxPreviewProps) {
   const stageRef = useRef<HTMLDivElement>(null);
-  const slideContainerRef = useRef<HTMLDivElement>(null);
+  const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const [presentation, setPresentation] = useState<LoadedPresentation | null>(null);
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [internalSlideIndex, setInternalSlideIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRendering, setIsRendering] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const activeSlideIndex = slideIndex ?? internalSlideIndex;
@@ -137,7 +114,7 @@ export function PptxPreview({
       for (let i = 0; i < count; i++) {
         if (cancelled) return;
         try {
-          results[i] = await generateCanvasThumbnail(presentation, i, 320);
+          results[i] = await generateThumbnailDataUrl(presentation, i, 320);
         } catch {
           results[i] = "";
         }
@@ -154,79 +131,84 @@ export function PptxPreview({
   }, [presentation, onThumbnailsChange]);
 
   useEffect(() => {
-    if (!presentation || !slideContainerRef.current || !stageRef.current) return;
-    const container = slideContainerRef.current;
-    container.innerHTML = "";
+    if (!presentation || !mainCanvasRef.current || !stageRef.current) return;
+    const canvas = mainCanvasRef.current;
+    const stage = stageRef.current;
 
     const render = async () => {
+      setIsRendering(true);
       try {
-        const { renderSlideWithInheritance } = await import("pptx-viewer");
-        const slide = presentation.slides[activeSlideIndex];
-        if (!slide) return;
-
-        const stageWidth = Math.max(320, stageRef.current!.clientWidth - 32);
-        const stageHeight = Math.max(240, stageRef.current!.clientHeight - 32);
-        const slideW = presentation.slideSize.width;
-        const slideH = presentation.slideSize.height;
-        const scale = Math.min(stageWidth / slideW, stageHeight / slideH);
-        const displayWidth = Math.max(1, Math.round(slideW * scale));
-
-        const { layout, master } = resolveSlideInheritance(presentation, slide);
-        const svg = renderSlideWithInheritance(
-          slide,
-          presentation.slideSize,
-          layout,
-          master,
-          { width: displayWidth },
-        );
-        svg.style.display = "block";
-        svg.style.margin = "0 auto";
-        svg.style.background = "#ffffff";
-        svg.style.boxShadow = "0 2px 12px rgba(0,0,0,0.12)";
-        svg.style.borderRadius = "2px";
-        container.appendChild(svg);
-      } catch (e: any) {
+        const slideSize = presentation.slideSize;
+        const stageW = Math.max(320, stage.clientWidth - 48);
+        const stageH = Math.max(240, stage.clientHeight - 48);
+        const scale = Math.min(stageW / slideSize.width, stageH / slideSize.height);
+        const displayW = Math.max(1, Math.round(slideSize.width * scale));
+        const displayH = Math.max(1, Math.round(slideSize.height * scale));
+        canvas.width = displayW;
+        canvas.height = displayH;
+        canvas.style.width = `${displayW}px`;
+        canvas.style.height = `${displayH}px`;
+        await renderToCanvas(presentation, activeSlideIndex, canvas);
+      } catch {
         try {
-          const { renderSlideToElement } = await import("pptx-viewer");
-          const stageWidth = Math.max(320, stageRef.current!.clientWidth - 32);
-          const stageHeight = Math.max(240, stageRef.current!.clientHeight - 32);
-          renderSlideToElement(presentation, activeSlideIndex, container, {
-            width: stageWidth,
-            height: stageHeight,
+          const { renderSlideWithInheritance } = await import("pptx-viewer");
+          const slide = presentation.slides[activeSlideIndex];
+          if (!slide) return;
+          let layout;
+          let master;
+          if (slide.layoutId && presentation.slideLayouts) {
+            layout = presentation.slideLayouts.get(slide.layoutId);
+          }
+          if (layout?.masterId && presentation.slideMasters) {
+            master = presentation.slideMasters.get(layout.masterId);
+          }
+          if (!master && presentation.slideMasters?.size) {
+            master = presentation.slideMasters.values().next().value as any;
+          }
+          const stageW = Math.max(320, stage.clientWidth - 48);
+          const stageH = Math.max(240, stage.clientHeight - 48);
+          const slideSize = presentation.slideSize;
+          const scale = Math.min(stageW / slideSize.width, stageH / slideSize.height);
+          const displayW = Math.max(1, Math.round(slideSize.width * scale));
+          const svg = renderSlideWithInheritance(slide, slideSize, layout, master, { width: displayW });
+          const serialized = new XMLSerializer().serializeToString(svg);
+          const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialized)}`;
+          const img = new Image();
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = reject;
+            img.src = dataUrl;
           });
-          const svg = container.querySelector("svg");
-          if (svg) {
-            svg.style.display = "block";
-            svg.style.margin = "0 auto";
-            svg.style.background = "#ffffff";
-            svg.style.boxShadow = "0 2px 12px rgba(0,0,0,0.12)";
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            canvas.width = img.naturalWidth || displayW;
+            canvas.height = img.naturalHeight || Math.round(displayW * slideSize.height / slideSize.width);
+            ctx.drawImage(img, 0, 0);
           }
         } catch {
           setError("スライド描画に失敗しました。");
         }
+      } finally {
+        setIsRendering(false);
       }
     };
     void render();
   }, [presentation, activeSlideIndex]);
 
   useEffect(() => {
-    if (!presentation || !stageRef.current) return;
+    if (!presentation || !stageRef.current || !mainCanvasRef.current) return;
     const stage = stageRef.current;
+    const canvas = mainCanvasRef.current;
     const observer = new ResizeObserver(() => {
-      if (!slideContainerRef.current || !stageRef.current) return;
-      const container = slideContainerRef.current;
-      const svgEl = container.querySelector("svg");
-      if (!svgEl) return;
-
-      const stageWidth = Math.max(320, stage.clientWidth - 32);
-      const stageHeight = Math.max(240, stage.clientHeight - 32);
-      const slideW = presentation.slideSize.width;
-      const slideH = presentation.slideSize.height;
-      const scale = Math.min(stageWidth / slideW, stageHeight / slideH);
-      const displayWidth = Math.max(1, Math.round(slideW * scale));
-      const displayHeight = Math.max(1, Math.round(slideH * scale));
-      svgEl.setAttribute("width", String(displayWidth));
-      svgEl.setAttribute("height", String(displayHeight));
+      if (!presentation) return;
+      const slideSize = presentation.slideSize;
+      const stageW = Math.max(320, stage.clientWidth - 48);
+      const stageH = Math.max(240, stage.clientHeight - 48);
+      const scale = Math.min(stageW / slideSize.width, stageH / slideSize.height);
+      const displayW = Math.max(1, Math.round(slideSize.width * scale));
+      const displayH = Math.max(1, Math.round(slideSize.height * scale));
+      canvas.style.width = `${displayW}px`;
+      canvas.style.height = `${displayH}px`;
     });
     observer.observe(stage);
     return () => observer.disconnect();
@@ -306,15 +288,19 @@ export function PptxPreview({
                         : "ring-1 ring-border hover:ring-foreground/30"
                     }`}
                   >
-                    <div className="w-full aspect-[16/9] bg-white flex items-center justify-center">
-                      <img
-                        src={thumb}
-                        alt={`Slide ${index + 1}`}
-                        className="w-full h-full object-contain"
-                        draggable={false}
-                      />
+                    <div className="w-full aspect-[16/9] bg-white flex items-center justify-center overflow-hidden">
+                      {thumb ? (
+                        <img
+                          src={thumb}
+                          alt={`Slide ${index + 1}`}
+                          className="w-full h-full object-contain"
+                          draggable={false}
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{index + 1}</span>
+                      )}
                     </div>
-                    <div className="text-[10px] py-0.5 text-muted-foreground bg-card/80">
+                    <div className="text-[10px] py-0.5 text-center text-muted-foreground bg-card/80">
                       {index + 1}
                     </div>
                   </button>
@@ -323,12 +309,22 @@ export function PptxPreview({
             )}
             <div
               ref={stageRef}
-              className="bg-[#e8ecf0] overflow-auto flex-1 flex items-center justify-center p-4"
+              className="bg-[#e8ecf0] overflow-auto flex-1 flex items-center justify-center p-6"
             >
-              <div
-                ref={slideContainerRef}
+              {isRendering && (
+                <div className="absolute">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/50" />
+                </div>
+              )}
+              <canvas
+                ref={mainCanvasRef}
                 aria-label={title}
-                className="flex items-center justify-center"
+                style={{
+                  display: "block",
+                  boxShadow: "0 2px 12px rgba(0,0,0,0.12)",
+                  borderRadius: "2px",
+                  background: "#ffffff",
+                }}
               />
             </div>
           </div>

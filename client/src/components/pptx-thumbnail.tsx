@@ -21,40 +21,22 @@ export function PptxThumbnail({ src, alt, className }: PptxThumbnailProps) {
       setIsError(false);
       setThumbDataUrl(null);
       try {
-        const { loadPresentation, renderSlideWithInheritance } = await import(
-          "pptx-viewer"
-        );
+        const { loadPresentation, renderSlideToCanvas } = await import("pptx-viewer");
         const presentation = await loadPresentation(src);
         cleanup = presentation.cleanup;
 
-        const slide = presentation.slides[0];
-        if (!slide) throw new Error("No slides");
+        if (!presentation.slides.length) throw new Error("No slides");
 
-        let layout;
-        let master;
-        if (slide.layoutId && presentation.slideLayouts) {
-          layout = presentation.slideLayouts.get(slide.layoutId);
-        }
-        if (layout?.masterId && presentation.slideMasters) {
-          master = presentation.slideMasters.get(layout.masterId);
-        }
-        if (!master && presentation.slideMasters?.size) {
-          master = presentation.slideMasters.values().next().value;
-        }
-
-        const svg = renderSlideWithInheritance(
-          slide,
-          presentation.slideSize,
-          layout,
-          master,
-          { width: 320 },
-        );
-
-        const serialized = new XMLSerializer().serializeToString(svg);
-        const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialized)}`;
+        const slideSize = presentation.slideSize;
+        const thumbW = 320;
+        const thumbH = Math.round((slideSize.height / slideSize.width) * thumbW);
+        const canvas = document.createElement("canvas");
+        canvas.width = thumbW;
+        canvas.height = thumbH;
+        await renderSlideToCanvas(presentation, 0, canvas);
 
         if (!mounted) return;
-        setThumbDataUrl(dataUrl);
+        setThumbDataUrl(canvas.toDataURL("image/png"));
       } catch {
         if (!mounted) return;
         setIsError(true);
