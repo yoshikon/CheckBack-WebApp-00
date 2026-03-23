@@ -137,45 +137,59 @@ async function generatePptxPreview(
   previewPath: string,
   previewFilename: string,
 ): Promise<PreviewResult> {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pptx-preview-"));
   try {
-    await execFileAsync("/usr/bin/qlmanage", [
-      "-t",
-      "-s",
-      "2048",
-      "-o",
-      tempDir,
-      filePath,
-    ]);
+    const JSZip = (await import("jszip")).default;
+    const data = fs.readFileSync(filePath);
+    const zip = await JSZip.loadAsync(data);
 
-    const generatedFile = fs
-      .readdirSync(tempDir)
-      .filter((name) => name.toLowerCase().endsWith(".png"))
-      .sort()
-      .map((name) => path.join(tempDir, name))[0];
+    const thumbnailFile =
+      zip.file("docProps/thumbnail.jpeg") ||
+      zip.file("docProps/thumbnail.png") ||
+      zip.file("docProps/thumbnail.emf");
 
-    if (!generatedFile || !fs.existsSync(generatedFile)) {
-      return {
-        success: false,
-        error: "PPTX preview image was not generated",
-      };
+    if (thumbnailFile) {
+      const thumbBuffer = await thumbnailFile.async("nodebuffer");
+      const ext = thumbnailFile.name.toLowerCase();
+      if (ext.endsWith(".jpeg") || ext.endsWith(".png")) {
+        fs.writeFileSync(previewPath, thumbBuffer);
+        return {
+          success: true,
+          previewPath,
+          previewUrl: `/uploads/${previewFilename}`,
+        };
+      }
     }
 
-    fs.copyFileSync(generatedFile, previewPath);
+    const slideImagePaths = Object.keys(zip.files)
+      .filter(
+        (name) =>
+          name.startsWith("ppt/media/") &&
+          (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")),
+      )
+      .sort();
+
+    if (slideImagePaths.length > 0) {
+      const firstImage = zip.file(slideImagePaths[0]);
+      if (firstImage) {
+        const imgBuffer = await firstImage.async("nodebuffer");
+        fs.writeFileSync(previewPath, imgBuffer);
+        return {
+          success: true,
+          previewPath,
+          previewUrl: `/uploads/${previewFilename}`,
+        };
+      }
+    }
+
     return {
-      success: true,
-      previewPath,
-      previewUrl: `/uploads/${previewFilename}`,
+      success: false,
+      error: "No preview image found in PPTX file",
     };
   } catch (error: any) {
     return {
       success: false,
       error: error.message || "PPTX preview generation failed",
     };
-  } finally {
-    try {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    } catch {}
   }
 }
 
