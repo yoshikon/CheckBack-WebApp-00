@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  .container {
+    width: 500px;
+    height: 400px;
+    border: 2px solid red;
+    overflow: auto;
+    display: flex;
+    align-items: flex-start;
+  }
+  .canvas {
+    background: blue;
+  }
+  .canvas.w-fit {
+    width: fit-content;
+    height: fit-content;
+  }
+  img {
+    max-width: 100%;
+    display: block;
+  }
+</style>
+</head>
+<body>
+  <h2>Without w-fit</h2>
+  <div class="container">
+    <div class="canvas">
+      <img src="https://via.placeholder.com/800x300" alt="img">
+    </div>
+  </div>
+
+  <h2>With w-fit</h2>
+  <div class="container">
+    <div class="canvas w-fit">
+      <img src="https://via.placeholder.com/800x300" alt="img">
+    </div>
+  </div>
+</body>
+</html>

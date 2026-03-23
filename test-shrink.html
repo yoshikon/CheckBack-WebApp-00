@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  .container {
+    width: 800px;
+    height: 600px;
+    border: 2px solid red;
+    overflow: auto;
+    display: flex;
+    align-items: flex-start;
+  }
+  .canvas {
+    background: blue;
+  }
+  img {
+    max-width: 100%;
+    display: block;
+  }
+</style>
+</head>
+<body>
+  <div class="container" id="cont">
+    <div class="canvas" id="canv">
+      <img src="https://via.placeholder.com/800x300" alt="img">
+    </div>
+  </div>
+  <script>
+    const cont = document.getElementById('cont');
+    const canv = document.getElementById('canv');
+    setTimeout(() => {
+      cont.style.paddingLeft = '400px';
+      cont.style.paddingRight = '400px';
+      console.log('Canvas width after padding:', canv.offsetWidth);
+    }, 100);
+  </script>
+</body>
+</html>
