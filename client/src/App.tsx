@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from "react";
+import { useEffect, lazy, Suspense } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -75,28 +75,24 @@ function FileReviewLayout({ children }: { children: React.ReactNode }) {
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, isLoading } = useAuth();
-  const [, setLocation] = useLocation();
+  const { user } = useAuth();
 
-  useEffect(() => {
-    if (!isLoading && !user) {
-      setLocation("/login");
-    }
-  }, [isLoading, user, setLocation]);
+  const storedUser = localStorage.getItem("checkback_user");
+  const isAuthenticated = !!user || !!storedUser;
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return null;
+  if (!isAuthenticated) {
+    return <LoginRedirect />;
   }
 
   return <>{children}</>;
+}
+
+function LoginRedirect() {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    setLocation("/login");
+  }, [setLocation]);
+  return null;
 }
 
 function Router() {
