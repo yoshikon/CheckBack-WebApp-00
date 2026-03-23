@@ -1,15 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
-
-type PptxPresentation = {
-  slides: unknown[];
-  slideSize?: {
-    width: number;
-    height: number;
-  };
-  cleanup?: () => void;
-};
+import { ChevronLeft, ChevronRight, Loader as Loader2 } from "lucide-react";
+import type {
+  LoadedPresentation,
+  Presentation,
+  Slide,
+  SlideLayout,
+  SlideMaster,
+} from "pptx-viewer";
 
 interface PptxPreviewProps {
   src: string;
@@ -22,6 +20,47 @@ interface PptxPreviewProps {
   showInternalThumbnails?: boolean;
 }
 
+function resolveSlideInheritance(
+  presentation: Presentation,
+  slide: Slide,
+): { layout?: SlideLayout; master?: SlideMaster } {
+  let layout: SlideLayout | undefined;
+  let master: SlideMaster | undefined;
+
+  if (slide.layoutId && presentation.slideLayouts) {
+    layout = presentation.slideLayouts.get(slide.layoutId);
+  }
+  if (layout?.masterId && presentation.slideMasters) {
+    master = presentation.slideMasters.get(layout.masterId);
+  }
+  if (!master && presentation.slideMasters?.size) {
+    master = presentation.slideMasters.values().next().value as SlideMaster | undefined;
+  }
+  return { layout, master };
+}
+
+async function generateCanvasThumbnail(
+  presentation: Presentation,
+  slideIndex: number,
+  width: number,
+): Promise<string> {
+  const { renderSlideWithInheritance } = await import("pptx-viewer");
+  const slide = presentation.slides[slideIndex];
+  if (!slide) return "";
+
+  const { layout, master } = resolveSlideInheritance(presentation, slide);
+  const svg = renderSlideWithInheritance(
+    slide,
+    presentation.slideSize,
+    layout,
+    master,
+    { width },
+  );
+
+  const serialized = new XMLSerializer().serializeToString(svg);
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialized)}`;
+}
+
 export function PptxPreview({
   src,
   title,
@@ -32,26 +71,28 @@ export function PptxPreview({
   onThumbnailsChange,
   showInternalThumbnails = true,
 }: PptxPreviewProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
-  const [presentation, setPresentation] = useState<PptxPresentation | null>(null);
+  const slideContainerRef = useRef<HTMLDivElement>(null);
+  const [presentation, setPresentation] = useState<LoadedPresentation | null>(null);
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [internalSlideIndex, setInternalSlideIndex] = useState(0);
-  const [renderNonce, setRenderNonce] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const activeSlideIndex = slideIndex ?? internalSlideIndex;
-  const setSlideIndex = (next: number) => {
-    if (slideIndex === undefined) {
-      setInternalSlideIndex(next);
-    }
-    onSlideIndexChange?.(next);
-  };
+  const setSlideIndex = useCallback(
+    (next: number) => {
+      if (slideIndex === undefined) {
+        setInternalSlideIndex(next);
+      }
+      onSlideIndexChange?.(next);
+    },
+    [slideIndex, onSlideIndexChange],
+  );
 
   useEffect(() => {
     let mounted = true;
-    let currentPresentation: PptxPresentation | null = null;
+    let loaded: LoadedPresentation | null = null;
     const load = async () => {
       setIsLoading(true);
       setError(null);
@@ -60,12 +101,11 @@ export function PptxPreview({
       onThumbnailsChange?.([]);
       try {
         const { loadPresentation } = await import("pptx-viewer");
-        const loaded = (await loadPresentation(src)) as PptxPresentation;
+        loaded = await loadPresentation(src);
         if (!mounted) {
-          loaded.cleanup?.();
+          loaded.cleanup();
           return;
         }
-        currentPresentation = loaded;
         setPresentation(loaded);
       } catch (e: any) {
         if (!mounted) return;
@@ -76,134 +116,148 @@ export function PptxPreview({
             : "PowerPointの表示に失敗しました。",
         );
       } finally {
-        if (mounted) {
-          setIsLoading(false);
-        }
+        if (mounted) setIsLoading(false);
       }
     };
     void load();
     return () => {
       mounted = false;
-      currentPresentation?.cleanup?.();
+      loaded?.cleanup();
     };
-  }, [src, onThumbnailsChange]);
+  }, [src]);
 
   useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
-    const observer = new ResizeObserver(() => {
-      setRenderNonce((prev) => prev + 1);
-    });
-    observer.observe(stage);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
+    if (!presentation) return;
     let cancelled = false;
-    const generateThumbnails = async () => {
-      if (!presentation) return;
-      try {
-        const { getThumbnails } = await import("pptx-viewer");
-        const svgs = getThumbnails(presentation as any, 200);
-        
-        if (svgs && svgs.length > 0) {
-          const nextThumbs = svgs.map((svg) => {
-            const serialized = new XMLSerializer().serializeToString(svg);
-            return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialized)}`;
-          });
-          
-          if (!cancelled) {
-            setThumbnails(nextThumbs);
-            onThumbnailsChange?.(nextThumbs);
+    const gen = async () => {
+      const count = presentation.slides.length;
+      const results: string[] = [];
+      for (let i = 0; i < count; i++) {
+        if (cancelled) return;
+        try {
+          const thumb = await generateCanvasThumbnail(presentation, i, 240);
+          results.push(thumb);
+        } catch {
+          const canvas = document.createElement("canvas");
+          canvas.width = 240;
+          canvas.height = 135;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, 240, 135);
+            ctx.strokeStyle = "#d1d5db";
+            ctx.strokeRect(0.5, 0.5, 239, 134);
+            ctx.fillStyle = "#6b7280";
+            ctx.font = "20px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(String(i + 1), 120, 67);
           }
-        } else {
-          throw new Error("No thumbnails generated");
-        }
-      } catch (e) {
-        console.error("Thumbnail generation error:", e);
-        if (!cancelled) {
-          const count = Math.max(0, presentation.slides?.length || 0);
-          const placeholders = Array.from({ length: count }, (_, i) => {
-            const canvas = document.createElement("canvas");
-            canvas.width = 112 * 2;
-            canvas.height = 80 * 2;
-            const ctx = canvas.getContext("2d");
-            if (ctx) {
-              ctx.fillStyle = "#ffffff";
-              ctx.fillRect(0, 0, canvas.width, canvas.height);
-              ctx.strokeStyle = "#d1d5db";
-              ctx.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
-              ctx.fillStyle = "#6b7280";
-              ctx.font = "24px sans-serif";
-              ctx.textAlign = "center";
-              ctx.textBaseline = "middle";
-              ctx.fillText(String(i + 1), canvas.width / 2, canvas.height / 2);
-            }
-            return canvas.toDataURL("image/png");
-          });
-          setThumbnails(placeholders);
-          onThumbnailsChange?.(placeholders);
+          results.push(canvas.toDataURL("image/png"));
         }
       }
+      if (!cancelled) {
+        setThumbnails(results);
+        onThumbnailsChange?.(results);
+      }
     };
-    void generateThumbnails();
+    void gen();
     return () => {
       cancelled = true;
     };
   }, [presentation, onThumbnailsChange]);
 
   useEffect(() => {
+    if (!presentation || !slideContainerRef.current || !stageRef.current) return;
+    const container = slideContainerRef.current;
+    container.innerHTML = "";
+
     const render = async () => {
-      if (!presentation || !containerRef.current || !stageRef.current) return;
       try {
-        const { renderSlideToElement } = await import("pptx-viewer");
-        containerRef.current.innerHTML = "";
-        const stageWidth = Math.max(320, stageRef.current.clientWidth - 16);
-        const stageHeight = Math.max(240, stageRef.current.clientHeight - 16);
-        const slideWidth = presentation.slideSize?.width || 1280;
-        const slideHeight = presentation.slideSize?.height || 720;
-        const scale = Math.min(stageWidth / slideWidth, stageHeight / slideHeight);
-        const displayWidth = Math.max(1, Math.round(slideWidth * scale));
-        const displayHeight = Math.max(1, Math.round(slideHeight * scale));
-        
+        const { renderSlideWithInheritance } = await import("pptx-viewer");
+        const slide = presentation.slides[activeSlideIndex];
+        if (!slide) return;
+
+        const stageWidth = Math.max(320, stageRef.current!.clientWidth - 32);
+        const stageHeight = Math.max(240, stageRef.current!.clientHeight - 32);
+        const slideW = presentation.slideSize.width;
+        const slideH = presentation.slideSize.height;
+        const scale = Math.min(stageWidth / slideW, stageHeight / slideH);
+        const displayWidth = Math.max(1, Math.round(slideW * scale));
+
+        const { layout, master } = resolveSlideInheritance(presentation, slide);
+        const svg = renderSlideWithInheritance(
+          slide,
+          presentation.slideSize,
+          layout,
+          master,
+          { width: displayWidth },
+        );
+        svg.style.display = "block";
+        svg.style.margin = "0 auto";
+        svg.style.background = "#ffffff";
+        svg.style.boxShadow = "0 2px 12px rgba(0,0,0,0.12)";
+        svg.style.borderRadius = "2px";
+        container.appendChild(svg);
+      } catch (e: any) {
         try {
-          renderSlideToElement(presentation as any, activeSlideIndex, containerRef.current, {
-            width: displayWidth,
-            height: displayHeight,
+          const { renderSlideToElement } = await import("pptx-viewer");
+          const stageWidth = Math.max(320, stageRef.current!.clientWidth - 32);
+          const stageHeight = Math.max(240, stageRef.current!.clientHeight - 32);
+          renderSlideToElement(presentation, activeSlideIndex, container, {
+            width: stageWidth,
+            height: stageHeight,
           });
-          const svg = containerRef.current.querySelector("svg");
+          const svg = container.querySelector("svg");
           if (svg) {
             svg.style.display = "block";
             svg.style.margin = "0 auto";
             svg.style.background = "#ffffff";
-            svg.style.maxWidth = "100%";
-            svg.style.maxHeight = "100%";
+            svg.style.boxShadow = "0 2px 12px rgba(0,0,0,0.12)";
           }
-        } catch (err) {
-          console.error("SVG render failed:", err);
-          throw new Error("SVG render failed");
+        } catch {
+          setError("スライド描画に失敗しました。");
         }
-      } catch (e: any) {
-        setError(
-          e?.message && String(e.message).trim().length > 0
-            ? String(e.message)
-            : "スライド描画に失敗しました。",
-        );
       }
     };
     void render();
-  }, [presentation, activeSlideIndex, renderNonce]);
+  }, [presentation, activeSlideIndex]);
+
+  useEffect(() => {
+    if (!presentation || !stageRef.current) return;
+    const stage = stageRef.current;
+    const observer = new ResizeObserver(() => {
+      if (!slideContainerRef.current || !stageRef.current) return;
+      const container = slideContainerRef.current;
+      const svgEl = container.querySelector("svg");
+      if (!svgEl) return;
+
+      const stageWidth = Math.max(320, stage.clientWidth - 32);
+      const stageHeight = Math.max(240, stage.clientHeight - 32);
+      const slideW = presentation.slideSize.width;
+      const slideH = presentation.slideSize.height;
+      const scale = Math.min(stageWidth / slideW, stageHeight / slideH);
+      const displayWidth = Math.max(1, Math.round(slideW * scale));
+      const displayHeight = Math.max(1, Math.round(slideH * scale));
+      svgEl.setAttribute("width", String(displayWidth));
+      svgEl.setAttribute("height", String(displayHeight));
+    });
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, [presentation]);
 
   const totalSlides = presentation?.slides?.length || 0;
   const showFallback =
     !isLoading && !!fallbackImageUrl && (!!error || !presentation);
 
   return (
-    <div className={`bg-[#dbe2eb] rounded-md border overflow-hidden ${className || ""}`}>
+    <div className={`bg-[#e8ecf0] rounded-md border overflow-hidden ${className || ""}`}>
       {isLoading && (
         <div className="flex flex-col items-center justify-center py-16 gap-2 w-full h-[78vh] min-h-[480px]">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <span className="text-sm text-muted-foreground">PowerPointを読み込み中...</span>
+          <span className="text-sm text-muted-foreground">
+            PowerPointを読み込み中...
+          </span>
         </div>
       )}
 
@@ -226,8 +280,8 @@ export function PptxPreview({
       )}
 
       {!showFallback && !isLoading && !error && presentation && (
-        <div className="space-y-2 p-2">
-          <div className="flex items-center justify-center gap-3">
+        <div className="flex flex-col h-[82vh] min-h-[480px]">
+          <div className="flex items-center justify-center gap-3 py-2 border-b bg-card/50">
             <Button
               variant="outline"
               size="sm"
@@ -236,59 +290,59 @@ export function PptxPreview({
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <span className="text-sm text-muted-foreground">
-              {activeSlideIndex + 1} / {Math.max(1, totalSlides)} スライド
+            <span className="text-sm font-medium text-muted-foreground tabular-nums">
+              {activeSlideIndex + 1} / {Math.max(1, totalSlides)}
             </span>
             <Button
               variant="outline"
               size="sm"
               onClick={() =>
-                setSlideIndex(Math.min(Math.max(totalSlides - 1, 0), activeSlideIndex + 1))
+                setSlideIndex(
+                  Math.min(Math.max(totalSlides - 1, 0), activeSlideIndex + 1),
+                )
               }
               disabled={activeSlideIndex >= totalSlides - 1}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
-          <div className="flex gap-0 border rounded-md overflow-hidden h-[78vh] min-h-[480px]">
-            {showInternalThumbnails && thumbnails.length > 0 ? (
-              <div className="w-[74px] shrink-0 bg-[#dbe2eb] border-r overflow-y-auto p-1 space-y-1">
+          <div className="flex flex-1 overflow-hidden">
+            {showInternalThumbnails && thumbnails.length > 0 && (
+              <div className="w-[100px] shrink-0 bg-[#e2e6ea] border-r overflow-y-auto py-2 px-1.5 space-y-1.5">
                 {thumbnails.map((thumb, index) => (
                   <button
-                    key={`${index}`}
+                    key={index}
                     type="button"
                     onClick={() => setSlideIndex(index)}
-                    className={`w-full rounded border overflow-hidden bg-white ${
+                    className={`w-full rounded overflow-hidden transition-all ${
                       activeSlideIndex === index
-                        ? "ring-2 ring-primary border-primary"
-                        : "border-muted"
+                        ? "ring-2 ring-primary shadow-sm"
+                        : "ring-1 ring-border hover:ring-foreground/30"
                     }`}
                   >
-                    <div className="w-full h-[40px] flex items-center justify-center bg-white">
+                    <div className="w-full aspect-[16/9] bg-white flex items-center justify-center">
                       <img
                         src={thumb}
-                        alt={`${index + 1} slide thumbnail`}
-                        className="max-w-full max-h-full object-contain"
+                        alt={`Slide ${index + 1}`}
+                        className="w-full h-full object-contain"
                         draggable={false}
                       />
                     </div>
-                    <div className="text-[10px] py-0.5 text-muted-foreground">
+                    <div className="text-[10px] py-0.5 text-muted-foreground bg-card/80">
                       {index + 1}
                     </div>
                   </button>
                 ))}
               </div>
-            ) : (
-              <div className="w-[74px] shrink-0 bg-[#dbe2eb] border-r" />
             )}
             <div
               ref={stageRef}
-              className="bg-[#dbe2eb] overflow-auto flex-1 p-4"
+              className="bg-[#e8ecf0] overflow-auto flex-1 flex items-center justify-center p-4"
             >
               <div
-                ref={containerRef}
+                ref={slideContainerRef}
                 aria-label={title}
-                className="w-full h-full flex items-center justify-center"
+                className="flex items-center justify-center"
               />
             </div>
           </div>
