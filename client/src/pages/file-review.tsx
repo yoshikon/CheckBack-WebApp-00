@@ -2455,19 +2455,30 @@ export default function FileReviewPage() {
             const loadedStrokes = JSON.parse(
               compareFile.paintAnnotation.strokesData,
             );
-            const processedStrokes = loadedStrokes.map(
+            const processedStrokes: PaintStroke[] = loadedStrokes.map(
               (stroke: PaintStroke) => {
                 if (stroke.tool === "image" && stroke.imageUrl) {
                   const img = new window.Image();
-                  img.src = stroke.imageUrl;
                   return { ...stroke, imageElement: img };
                 }
                 return stroke;
               },
             );
-            setCompareRightPaintStrokes(processedStrokes);
-            comparePaintCacheRef.current[currentRightCompareCacheKey] =
-              processedStrokes;
+            const imageLoadPromises = processedStrokes.map((stroke) => {
+              if (stroke.tool === "image" && stroke.imageElement && stroke.imageUrl) {
+                return new Promise<void>((resolve) => {
+                  stroke.imageElement!.onload = () => resolve();
+                  stroke.imageElement!.onerror = () => resolve();
+                  stroke.imageElement!.src = stroke.imageUrl!;
+                });
+              }
+              return Promise.resolve();
+            });
+            Promise.all(imageLoadPromises).then(() => {
+              setCompareRightPaintStrokes([...processedStrokes]);
+              comparePaintCacheRef.current[currentRightCompareCacheKey] =
+                [...processedStrokes];
+            });
           } catch (e) {
             console.error("Failed to parse compare paint annotations:", e);
             setCompareRightPaintStrokes([]);
@@ -4919,15 +4930,26 @@ export default function FileReviewPage() {
       if (file.paintAnnotation?.strokesData) {
         try {
           const loadedStrokes = JSON.parse(file.paintAnnotation.strokesData);
-          const processedStrokes = loadedStrokes.map((stroke: PaintStroke) => {
+          const processedStrokes: PaintStroke[] = loadedStrokes.map((stroke: PaintStroke) => {
             if (stroke.tool === "image" && stroke.imageUrl) {
               const img = new window.Image();
-              img.src = stroke.imageUrl;
               return { ...stroke, imageElement: img };
             }
             return stroke;
           });
-          setPaintStrokes(processedStrokes);
+          const imageLoadPromises = processedStrokes.map((stroke) => {
+            if (stroke.tool === "image" && stroke.imageElement && stroke.imageUrl) {
+              return new Promise<void>((resolve) => {
+                stroke.imageElement!.onload = () => resolve();
+                stroke.imageElement!.onerror = () => resolve();
+                stroke.imageElement!.src = stroke.imageUrl!;
+              });
+            }
+            return Promise.resolve();
+          });
+          Promise.all(imageLoadPromises).then(() => {
+            setPaintStrokes([...processedStrokes]);
+          });
         } catch (e) {
           console.error("Failed to parse paint annotations:", e);
           setPaintStrokes([]);
