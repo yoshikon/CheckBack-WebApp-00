@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
 import { PptxPreview } from "@/components/pptx-preview";
+import { PdfViewer } from "@/components/pdf-viewer";
 import {
   ArrowLeft,
   MessageSquare,
@@ -1932,6 +1933,7 @@ export default function FileReviewPage() {
   const [duration, setDuration] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const pdfFrameRef = useRef<HTMLIFrameElement>(null);
+  const pdfViewerContainerRef = useRef<HTMLDivElement>(null);
 
   // Layer panel state
   const [showLayerPanel, setShowLayerPanel] = useState(true);
@@ -5642,11 +5644,11 @@ export default function FileReviewPage() {
       file?.mimeType === "application/pdf" &&
       !isAiFile;
     if (!isPdfCanvasEnabled) return;
-    const iframe = pdfFrameRef.current;
+    const pdfContainer = pdfViewerContainerRef.current;
     const canvas = paintCanvasRef.current;
-    if (!iframe || !canvas) return;
-    const width = Math.max(1, Math.round(iframe.clientWidth));
-    const height = Math.max(1, Math.round(iframe.clientHeight));
+    if (!pdfContainer || !canvas) return;
+    const width = Math.max(1, Math.round(pdfContainer.offsetWidth));
+    const height = Math.max(1, Math.round(pdfContainer.offsetHeight));
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
@@ -7886,12 +7888,12 @@ export default function FileReviewPage() {
     const isPdfCanvasEnabled = file.mimeType === "application/pdf" && !isAiFile;
     if (!isPdfCanvasEnabled) return;
     syncPdfOverlaySize();
-    const iframe = pdfFrameRef.current;
-    if (!iframe) return;
+    const container = pdfViewerContainerRef.current;
+    if (!container) return;
     const observer = new ResizeObserver(() => {
       syncPdfOverlaySize();
     });
-    observer.observe(iframe);
+    observer.observe(container);
     return () => {
       observer.disconnect();
     };
@@ -8874,7 +8876,8 @@ export default function FileReviewPage() {
               <div
                 ref={canvasRef}
                 className={cn(
-                  "relative bg-card rounded-lg shadow-lg overflow-hidden w-fit h-fit",
+                  "relative bg-card rounded-lg shadow-lg w-fit h-fit",
+                  isPdf ? "overflow-visible" : "overflow-hidden",
                   isAddingComment && !isPaintMode && "cursor-crosshair",
                   isPaintMode && "cursor-crosshair",
                 )}
@@ -8901,13 +8904,17 @@ export default function FileReviewPage() {
                   />
                 )}
                 {isPdf && file.url && (
-                  <iframe
-                    ref={pdfFrameRef}
-                    src={file.url}
-                    className="w-[min(96vw,1400px)] h-[min(85vh,1200px)] min-h-[800px] bg-white"
-                    title={file.name}
-                    onLoad={() => syncPdfOverlaySize()}
-                  />
+                  <div
+                    ref={pdfViewerContainerRef}
+                    className="w-[min(96vw,1400px)] bg-white"
+                  >
+                    <PdfViewer
+                      url={file.url}
+                      onReady={() => {
+                        setTimeout(() => syncPdfOverlaySize(), 100);
+                      }}
+                    />
+                  </div>
                 )}
                 {isPptx && pptxDataUrl && (
                   <div className="w-[min(96vw,1400px)]">
