@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { supabase } from "./db";
 import { randomBytes } from "crypto";
 import multer from "multer";
 import path from "path";
@@ -15,23 +16,48 @@ import {
 } from "./layer-extractor";
 import bcrypt from "bcryptjs";
 
+const SUPABASE_STORAGE_BUCKET = "uploads";
+
+async function uploadToSupabaseStorage(
+  localFilePath: string,
+  storagePath: string,
+  mimeType: string,
+): Promise<string> {
+  const fileBuffer = fs.readFileSync(localFilePath);
+  const { error } = await supabase.storage
+    .from(SUPABASE_STORAGE_BUCKET)
+    .upload(storagePath, fileBuffer, {
+      contentType: mimeType,
+      upsert: true,
+    });
+  if (error) throw error;
+  const { data } = supabase.storage
+    .from(SUPABASE_STORAGE_BUCKET)
+    .getPublicUrl(storagePath);
+  return data.publicUrl;
+}
+
+async function deleteFromSupabaseStorage(storagePath: string): Promise<void> {
+  await supabase.storage.from(SUPABASE_STORAGE_BUCKET).remove([storagePath]);
+}
+
+function extractStoragePath(url: string): string | null {
+  if (!url) return null;
+  if (url.startsWith("/uploads/")) {
+    return url.slice("/uploads/".length);
+  }
+  const marker = `/storage/v1/object/public/${SUPABASE_STORAGE_BUCKET}/`;
+  const idx = url.indexOf(marker);
+  if (idx !== -1) {
+    return decodeURIComponent(url.slice(idx + marker.length));
+  }
+  return null;
+}
+
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      const uploadDir = path.join(process.cwd(), "uploads");
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-      cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      const normalizedName = normalizeUploadedFilename(file.originalname);
-      cb(null, uniqueSuffix + "-" + normalizedName);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: {
-    fileSize: 200 * 1024 * 1024, // 200MB for large design files (PSD, AI, etc.)
+    fileSize: 200 * 1024 * 1024,
   },
 });
 
@@ -386,8 +412,6 @@ export async function registerRoutes(
         }
         const originalName = normalizeUploadedFilename(req.file.originalname);
 
-        const fileUrl = `/uploads/${req.file.filename}`;
-
         let versionNumber = 1;
         let resolvedParentFileId: string | null = null;
 
@@ -418,23 +442,50 @@ export async function registerRoutes(
           }
         }
 
+        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+        const storageKey = `${uniqueSuffix}-${originalName}`;
+        const tmpDir = path.join(process.cwd(), "uploads");
+        if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+        const tmpFilePath = path.join(tmpDir, storageKey);
+        fs.writeFileSync(tmpFilePath, req.file.buffer);
+
+        let fileUrl: string;
         let previewPath: string | null = null;
         let previewUrl: string | null = null;
 
-        if (needsPreviewGeneration(req.file.mimetype, originalName)) {
-          const previewResult = await generatePreview(
-            req.file.path,
-            req.file.mimetype,
-            originalName,
-          );
-          if (
-            previewResult.success &&
-            previewResult.previewPath &&
-            previewResult.previewUrl
-          ) {
-            previewPath = previewResult.previewPath;
-            previewUrl = previewResult.previewUrl;
+        try {
+          fileUrl = await uploadToSupabaseStorage(tmpFilePath, storageKey, req.file.mimetype);
+
+          if (needsPreviewGeneration(req.file.mimetype, originalName)) {
+            const previewResult = await generatePreview(
+              tmpFilePath,
+              req.file.mimetype,
+              originalName,
+            );
+            if (
+              previewResult.success &&
+              previewResult.previewPath &&
+              previewResult.previewUrl
+            ) {
+              previewPath = previewResult.previewPath;
+              const previewFilename = path.basename(previewResult.previewPath);
+              const previewKey = `previews/${previewFilename}`;
+              try {
+                const previewPublicUrl = await uploadToSupabaseStorage(
+                  previewResult.previewPath,
+                  previewKey,
+                  "image/png",
+                );
+                previewUrl = previewPublicUrl;
+                fs.unlinkSync(previewResult.previewPath);
+                previewPath = previewKey;
+              } catch {
+                previewUrl = previewResult.previewUrl;
+              }
+            }
           }
+        } finally {
+          if (fs.existsSync(tmpFilePath)) fs.unlinkSync(tmpFilePath);
         }
 
         // For Adobe files (PSD/AI), use preview URL for thumbnail; for regular images, use original file URL
@@ -454,7 +505,7 @@ export async function registerRoutes(
           name: originalName,
           mimeType: req.file.mimetype,
           sizeBytes: req.file.size,
-          storagePath: req.file.path,
+          storagePath: storageKey,
           url: fileUrl,
           thumbnailUrl: thumbnailUrl,
           previewPath: previewPath,
@@ -490,7 +541,17 @@ export async function registerRoutes(
             .json({ error: "Only image files are allowed" });
         }
 
-        const imageUrl = `/uploads/${req.file.filename}`;
+        const paintKey = `paint/${Date.now()}-${Math.round(Math.random() * 1e9)}.png`;
+        const tmpDir = path.join(process.cwd(), "uploads");
+        if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+        const tmpPath = path.join(tmpDir, path.basename(paintKey));
+        fs.writeFileSync(tmpPath, req.file.buffer);
+        let imageUrl: string;
+        try {
+          imageUrl = await uploadToSupabaseStorage(tmpPath, paintKey, req.file.mimetype);
+        } finally {
+          if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+        }
         return res.status(201).json({ url: imageUrl });
       } catch (error) {
         return res.status(500).json({ error: "Internal server error" });
@@ -511,90 +572,66 @@ export async function registerRoutes(
         return res.status(404).json({ error: "File not found" });
       }
 
-      // 1. Delete main file
-      if (file.storagePath && fs.existsSync(file.storagePath)) {
+      // 1. Delete main file from Supabase Storage
+      if (file.storagePath) {
         try {
-          fs.unlinkSync(file.storagePath);
+          const sp = extractStoragePath(file.storagePath) || file.storagePath;
+          await deleteFromSupabaseStorage(sp);
         } catch (e) {
-          console.error(`Failed to delete file ${file.storagePath}:`, e);
+          console.error(`Failed to delete file from storage:`, e);
         }
       }
 
-      // 2. Delete thumbnail if it's a local file and different from main file
-      if (
+      // 2. Delete preview/thumbnail from Supabase Storage if different from main
+      if (file.previewPath) {
+        try {
+          const pp = extractStoragePath(file.previewPath) || file.previewPath;
+          await deleteFromSupabaseStorage(pp);
+        } catch (e) {
+          console.error(`Failed to delete preview from storage:`, e);
+        }
+      } else if (
         file.thumbnailUrl &&
-        file.thumbnailUrl.startsWith("/uploads/") &&
         file.thumbnailUrl !== file.url
       ) {
-        const thumbPath = path.join(process.cwd(), file.thumbnailUrl);
-        if (fs.existsSync(thumbPath)) {
-          try {
-            fs.unlinkSync(thumbPath);
-          } catch (e) {
-            console.error(`Failed to delete thumbnail ${thumbPath}:`, e);
-          }
-        }
-      }
-
-      // 3. Delete preview file if exists
-      if (file.previewPath && fs.existsSync(file.previewPath)) {
         try {
-          fs.unlinkSync(file.previewPath);
+          const tp = extractStoragePath(file.thumbnailUrl);
+          if (tp) await deleteFromSupabaseStorage(tp);
         } catch (e) {
-          console.error(`Failed to delete preview ${file.previewPath}:`, e);
+          console.error(`Failed to delete thumbnail from storage:`, e);
         }
       }
 
-      // 4. Delete reply attachments
+      // 3. Delete reply attachments from Supabase Storage
       if (file.comments) {
         for (const comment of file.comments) {
           const replies = await storage.getRepliesByComment(comment.id);
           for (const reply of replies) {
-            if (
-              reply.attachmentUrl &&
-              reply.attachmentUrl.startsWith("/uploads/")
-            ) {
-              const attachmentPath = path.join(
-                process.cwd(),
-                reply.attachmentUrl,
-              );
-              if (fs.existsSync(attachmentPath)) {
-                try {
-                  fs.unlinkSync(attachmentPath);
-                } catch (e) {
-                  console.error(
-                    `Failed to delete attachment ${attachmentPath}:`,
-                    e,
-                  );
-                }
+            if (reply.attachmentUrl) {
+              try {
+                const ap = extractStoragePath(reply.attachmentUrl);
+                if (ap) await deleteFromSupabaseStorage(ap);
+              } catch (e) {
+                console.error(`Failed to delete attachment from storage:`, e);
               }
             }
           }
         }
       }
 
-      // 5. Delete paint annotation images
+      // 4. Delete paint annotation images from Supabase Storage
       const paintAnnotation = await storage.getPaintAnnotation(fileId);
       if (paintAnnotation && paintAnnotation.strokesData) {
         try {
           const strokes = JSON.parse(paintAnnotation.strokesData);
           if (Array.isArray(strokes)) {
             for (const stroke of strokes) {
-              if (
-                stroke.tool === "image" &&
-                stroke.imageUrl &&
-                stroke.imageUrl.startsWith("/uploads/")
-              ) {
-                const imagePath = path.join(process.cwd(), stroke.imageUrl);
-                if (fs.existsSync(imagePath)) {
-                  try {
-                    fs.unlinkSync(imagePath);
-                  } catch (e) {
-                    console.error(
-                      `Failed to delete paint image ${imagePath}:`,
-                      e,
-                    );
-                  }
+              if (stroke.tool === "image" && stroke.imageUrl) {
+                try {
+                  const ip = extractStoragePath(stroke.imageUrl);
+                  if (ip) await deleteFromSupabaseStorage(ip);
+                } catch (e) {
+                  console.error(`Failed to delete paint image from storage:`, e);
                 }
               }
             }
@@ -604,7 +641,7 @@ export async function registerRoutes(
         }
       }
 
-      // 6. Delete file and related data from DB
+      // 5. Delete file and related data from DB
       await storage.deleteFile(fileId);
 
       return res.status(204).send();
@@ -628,7 +665,7 @@ export async function registerRoutes(
           return res.json({ previewUrl: file.thumbnailUrl });
         }
 
-        if (!file.storagePath || !fs.existsSync(file.storagePath)) {
+        if (!file.storagePath) {
           return res.status(404).json({ error: "File storage not found" });
         }
 
@@ -638,21 +675,62 @@ export async function registerRoutes(
           });
         }
 
-        const previewResult = await generatePreview(
-          file.storagePath,
-          file.mimeType,
-          file.name,
-        );
+        const tmpDir = path.join(process.cwd(), "uploads");
+        if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+        let localFilePath = file.storagePath;
+        let downloadedTmp: string | null = null;
+
+        if (!fs.existsSync(file.storagePath)) {
+          const storageKey = extractStoragePath(file.storagePath) || file.storagePath;
+          const { data: dlData, error: dlError } = await supabase.storage
+            .from(SUPABASE_STORAGE_BUCKET)
+            .download(storageKey);
+          if (dlError || !dlData) {
+            return res.status(404).json({ error: "File storage not found" });
+          }
+          const tmpName = `tmp-${Date.now()}-${path.basename(storageKey)}`;
+          downloadedTmp = path.join(tmpDir, tmpName);
+          const buf = Buffer.from(await dlData.arrayBuffer());
+          fs.writeFileSync(downloadedTmp, buf);
+          localFilePath = downloadedTmp;
+        }
+
+        let previewResult;
+        try {
+          previewResult = await generatePreview(
+            localFilePath,
+            file.mimeType,
+            file.name,
+          );
+        } finally {
+          if (downloadedTmp && fs.existsSync(downloadedTmp)) fs.unlinkSync(downloadedTmp);
+        }
+
         if (
           previewResult.success &&
           previewResult.previewPath &&
           previewResult.previewUrl
         ) {
+          const previewFilename = path.basename(previewResult.previewPath);
+          const previewKey = `previews/${previewFilename}`;
+          let finalPreviewUrl = previewResult.previewUrl;
+          let finalPreviewPath: string = previewKey;
+          try {
+            finalPreviewUrl = await uploadToSupabaseStorage(
+              previewResult.previewPath,
+              previewKey,
+              "image/png",
+            );
+            fs.unlinkSync(previewResult.previewPath);
+          } catch {
+            finalPreviewPath = previewResult.previewPath;
+          }
           await storage.updateFile(file.id, {
-            thumbnailUrl: previewResult.previewUrl,
-            previewPath: previewResult.previewPath,
+            thumbnailUrl: finalPreviewUrl,
+            previewPath: finalPreviewPath,
           });
-          return res.json({ previewUrl: previewResult.previewUrl });
+          return res.json({ previewUrl: finalPreviewUrl });
         }
 
         return res
@@ -673,7 +751,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "File not found" });
       }
 
-      if (!file.storagePath || !fs.existsSync(file.storagePath)) {
+      if (!file.storagePath) {
         return res.status(404).json({ error: "File storage not found" });
       }
 
@@ -683,11 +761,25 @@ export async function registerRoutes(
           .json({ error: "Layer extraction not supported for this file type" });
       }
 
-      const result = await extractLayers(
-        file.storagePath,
-        file.mimeType,
-        file.name,
-      );
+      const layersTmpDir = path.join(process.cwd(), "uploads");
+      if (!fs.existsSync(layersTmpDir)) fs.mkdirSync(layersTmpDir, { recursive: true });
+      let layersLocalPath = file.storagePath;
+      let layersTmpFile: string | null = null;
+      if (!fs.existsSync(file.storagePath)) {
+        const sk = extractStoragePath(file.storagePath) || file.storagePath;
+        const { data: d, error: e } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).download(sk);
+        if (e || !d) return res.status(404).json({ error: "File storage not found" });
+        layersTmpFile = path.join(layersTmpDir, `tmp-layers-${Date.now()}-${path.basename(sk)}`);
+        fs.writeFileSync(layersTmpFile, Buffer.from(await d.arrayBuffer()));
+        layersLocalPath = layersTmpFile;
+      }
+
+      let result;
+      try {
+        result = await extractLayers(layersLocalPath, file.mimeType, file.name);
+      } finally {
+        if (layersTmpFile && fs.existsSync(layersTmpFile)) fs.unlinkSync(layersTmpFile);
+      }
 
       if (!result.success) {
         return res
@@ -716,7 +808,7 @@ export async function registerRoutes(
           return res.status(404).json({ error: "File not found" });
         }
 
-        if (!file.storagePath || !fs.existsSync(file.storagePath)) {
+        if (!file.storagePath) {
           return res.status(404).json({ error: "File storage not found" });
         }
 
@@ -726,12 +818,25 @@ export async function registerRoutes(
           });
         }
 
-        const result = await extractLayerImages(
-          file.storagePath,
-          file.id,
-          file.mimeType,
-          file.name,
-        );
+        const liTmpDir = path.join(process.cwd(), "uploads");
+        if (!fs.existsSync(liTmpDir)) fs.mkdirSync(liTmpDir, { recursive: true });
+        let liLocalPath = file.storagePath;
+        let liTmpFile: string | null = null;
+        if (!fs.existsSync(file.storagePath)) {
+          const sk = extractStoragePath(file.storagePath) || file.storagePath;
+          const { data: d, error: e } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).download(sk);
+          if (e || !d) return res.status(404).json({ error: "File storage not found" });
+          liTmpFile = path.join(liTmpDir, `tmp-li-${Date.now()}-${path.basename(sk)}`);
+          fs.writeFileSync(liTmpFile, Buffer.from(await d.arrayBuffer()));
+          liLocalPath = liTmpFile;
+        }
+
+        let result;
+        try {
+          result = await extractLayerImages(liLocalPath, file.id, file.mimeType, file.name);
+        } finally {
+          if (liTmpFile && fs.existsSync(liTmpFile)) fs.unlinkSync(liTmpFile);
+        }
 
         if (!result.success) {
           return res
@@ -940,10 +1045,19 @@ export async function registerRoutes(
         let attachmentType: string | null = null;
 
         if (req.file) {
-          attachmentUrl = `/uploads/${req.file.filename}`;
           attachmentType = req.file.mimetype;
-
           const originalName = normalizeUploadedFilename(req.file.originalname);
+          const attachKey = `attachments/${Date.now()}-${Math.round(Math.random() * 1e9)}-${originalName}`;
+          const aTmpDir = path.join(process.cwd(), "uploads");
+          if (!fs.existsSync(aTmpDir)) fs.mkdirSync(aTmpDir, { recursive: true });
+          const aTmpPath = path.join(aTmpDir, path.basename(attachKey));
+          fs.writeFileSync(aTmpPath, req.file.buffer);
+          try {
+            attachmentUrl = await uploadToSupabaseStorage(aTmpPath, attachKey, req.file.mimetype);
+          } finally {
+            if (fs.existsSync(aTmpPath)) fs.unlinkSync(aTmpPath);
+          }
+
           const isImageAttachment = attachmentType.startsWith("image/");
 
           if (isImageAttachment) {
@@ -1542,27 +1656,52 @@ export async function registerRoutes(
           return res.status(400).json({ error: "No file uploaded" });
         }
 
-        const fileUrl = `/uploads/${file.filename}`;
         const mimeType = file.mimetype;
         const originalName = normalizeUploadedFilename(file.originalname);
+        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+        const storageKey = `${uniqueSuffix}-${originalName}`;
+        const tmpDir = path.join(process.cwd(), "uploads");
+        if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+        const tmpFilePath = path.join(tmpDir, storageKey);
+        fs.writeFileSync(tmpFilePath, file.buffer);
 
+        let fileUrl: string;
         let previewPath: string | null = null;
         let previewUrl: string | null = null;
 
-        if (needsPreviewGeneration(mimeType, originalName)) {
-          const previewResult = await generatePreview(
-            file.path,
-            mimeType,
-            originalName,
-          );
-          if (
-            previewResult.success &&
-            previewResult.previewPath &&
-            previewResult.previewUrl
-          ) {
-            previewPath = previewResult.previewPath;
-            previewUrl = previewResult.previewUrl;
+        try {
+          fileUrl = await uploadToSupabaseStorage(tmpFilePath, storageKey, mimeType);
+
+          if (needsPreviewGeneration(mimeType, originalName)) {
+            const previewResult = await generatePreview(
+              tmpFilePath,
+              mimeType,
+              originalName,
+            );
+            if (
+              previewResult.success &&
+              previewResult.previewPath &&
+              previewResult.previewUrl
+            ) {
+              const previewFilename = path.basename(previewResult.previewPath);
+              const previewKey = `previews/${previewFilename}`;
+              try {
+                const previewPublicUrl = await uploadToSupabaseStorage(
+                  previewResult.previewPath,
+                  previewKey,
+                  "image/png",
+                );
+                previewUrl = previewPublicUrl;
+                fs.unlinkSync(previewResult.previewPath);
+                previewPath = previewKey;
+              } catch {
+                previewUrl = previewResult.previewUrl;
+                previewPath = previewResult.previewPath;
+              }
+            }
           }
+        } finally {
+          if (fs.existsSync(tmpFilePath)) fs.unlinkSync(tmpFilePath);
         }
 
         const savedFile = await storage.createQuickCheckFile({
@@ -1659,13 +1798,13 @@ export async function registerRoutes(
         // Wait for any remaining lazy-loaded images to finish
         await page.waitForNetworkIdle({ timeout: 5000 }).catch(() => {});
 
-        const uploadDir = path.join(process.cwd(), "uploads");
-        if (!fs.existsSync(uploadDir)) {
-          fs.mkdirSync(uploadDir, { recursive: true });
+        const captureDir = path.join(process.cwd(), "uploads");
+        if (!fs.existsSync(captureDir)) {
+          fs.mkdirSync(captureDir, { recursive: true });
         }
 
         const filename = `capture-${Date.now()}-${Math.round(Math.random() * 1e9)}.png`;
-        const filePath = path.join(uploadDir, filename);
+        const filePath = path.join(captureDir, filename);
 
         await page.screenshot({
           path: filePath,
@@ -1673,7 +1812,13 @@ export async function registerRoutes(
         });
 
         const stats = fs.statSync(filePath);
-        const fileUrl = `/uploads/${filename}`;
+        const captureKey = `captures/${filename}`;
+        let fileUrl: string;
+        try {
+          fileUrl = await uploadToSupabaseStorage(filePath, captureKey, "image/png");
+        } finally {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        }
 
         const savedFile = await storage.createQuickCheckFile({
           name: name || new URL(url).hostname,
