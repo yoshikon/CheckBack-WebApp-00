@@ -5,10 +5,11 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import { AppSidebar } from "@/components/app-sidebar";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
+
+const AppSidebar = lazy(() => import("@/components/app-sidebar").then(m => ({ default: m.AppSidebar })));
 
 const NotFound = lazy(() => import("@/pages/not-found"));
 const LandingPage = lazy(() => import("@/pages/landing"));
@@ -41,7 +42,9 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider style={style as React.CSSProperties}>
       <div className="flex h-screen w-full">
-        <AppSidebar />
+        <Suspense fallback={<div className="w-16 shrink-0" />}>
+          <AppSidebar />
+        </Suspense>
         <div className="flex flex-col flex-1 overflow-hidden">
           <header className="flex items-center justify-between gap-2 px-4 py-2 border-b bg-card">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
@@ -65,7 +68,9 @@ function FileReviewLayout({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider style={style as React.CSSProperties}>
       <div className="flex h-screen w-full">
-        <AppSidebar />
+        <Suspense fallback={<div className="w-16 shrink-0" />}>
+          <AppSidebar />
+        </Suspense>
         <div className="flex flex-col flex-1 overflow-hidden">
           {children}
         </div>
