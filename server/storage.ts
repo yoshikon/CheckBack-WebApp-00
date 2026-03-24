@@ -179,7 +179,32 @@ export class DatabaseStorage implements IStorage {
     this.seedData().catch(console.error);
   }
 
+  private async cleanupLocalPathRecords() {
+    try {
+      const { data: brokenFiles } = await supabase
+        .from("files")
+        .select("id")
+        .or("url.like./uploads/%,url.like.http://localhost%");
+      if (!brokenFiles || brokenFiles.length === 0) return;
+      for (const { id: fileId } of brokenFiles) {
+        const { data: comments } = await supabase.from("comments").select("id").eq("file_id", fileId);
+        if (comments && comments.length > 0) {
+          const commentIds = (comments as any[]).map((c) => c.id);
+          await supabase.from("comment_replies").delete().in("comment_id", commentIds);
+          await supabase.from("comment_anchors").delete().in("comment_id", commentIds);
+        }
+        await supabase.from("comments").delete().eq("file_id", fileId);
+        await supabase.from("paint_annotations").delete().eq("file_id", fileId);
+        await supabase.from("share_links").delete().eq("file_id", fileId);
+        await supabase.from("files").delete().eq("id", fileId);
+      }
+    } catch (e) {
+      console.error("cleanupLocalPathRecords error:", e);
+    }
+  }
+
   private async seedData() {
+    await this.cleanupLocalPathRecords();
     const { data: existingUsers } = await supabase.from("users").select("id").limit(1);
     if (existingUsers && existingUsers.length > 0) return;
 

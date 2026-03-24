@@ -456,6 +456,10 @@ export async function registerRoutes(
         try {
           fileUrl = await uploadToSupabaseStorage(tmpFilePath, storageKey, req.file.mimetype);
 
+          if (!fileUrl || !fileUrl.startsWith("http")) {
+            throw new Error("Supabase storage upload did not return a valid URL");
+          }
+
           if (needsPreviewGeneration(req.file.mimetype, originalName)) {
             const previewResult = await generatePreview(
               tmpFilePath,
@@ -467,7 +471,6 @@ export async function registerRoutes(
               previewResult.previewPath &&
               previewResult.previewUrl
             ) {
-              previewPath = previewResult.previewPath;
               const previewFilename = path.basename(previewResult.previewPath);
               const previewKey = `previews/${previewFilename}`;
               try {
@@ -476,11 +479,15 @@ export async function registerRoutes(
                   previewKey,
                   "image/png",
                 );
-                previewUrl = previewPublicUrl;
+                if (previewPublicUrl && previewPublicUrl.startsWith("http")) {
+                  previewUrl = previewPublicUrl;
+                  previewPath = previewKey;
+                }
                 fs.unlinkSync(previewResult.previewPath);
-                previewPath = previewKey;
               } catch {
-                previewUrl = previewResult.previewUrl;
+                if (fs.existsSync(previewResult.previewPath)) {
+                  fs.unlinkSync(previewResult.previewPath);
+                }
               }
             }
           }
@@ -1672,6 +1679,10 @@ export async function registerRoutes(
         try {
           fileUrl = await uploadToSupabaseStorage(tmpFilePath, storageKey, mimeType);
 
+          if (!fileUrl || !fileUrl.startsWith("http")) {
+            throw new Error("Supabase storage upload did not return a valid URL");
+          }
+
           if (needsPreviewGeneration(mimeType, originalName)) {
             const previewResult = await generatePreview(
               tmpFilePath,
@@ -1691,12 +1702,15 @@ export async function registerRoutes(
                   previewKey,
                   "image/png",
                 );
-                previewUrl = previewPublicUrl;
+                if (previewPublicUrl && previewPublicUrl.startsWith("http")) {
+                  previewUrl = previewPublicUrl;
+                  previewPath = previewKey;
+                }
                 fs.unlinkSync(previewResult.previewPath);
-                previewPath = previewKey;
               } catch {
-                previewUrl = previewResult.previewUrl;
-                previewPath = previewResult.previewPath;
+                if (fs.existsSync(previewResult.previewPath)) {
+                  fs.unlinkSync(previewResult.previewPath);
+                }
               }
             }
           }
